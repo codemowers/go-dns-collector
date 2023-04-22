@@ -29,6 +29,7 @@ type HitsStream struct {
 }
 
 type HitsUniq struct {
+	Reverse        map[string]string
 	Clients        map[string]int
 	Domains        map[string]int
 	NxDomains      map[string]int
@@ -75,6 +76,7 @@ func NewRestAPI(config *dnsutils.Config, logger *logger.Logger, version string, 
 			Streams: make(map[string]SearchBy),
 		},
 		HitsUniq: HitsUniq{
+			Reverse:        make(map[string]string),
 			Clients:        make(map[string]int),
 			Domains:        make(map[string]int),
 			NxDomains:      make(map[string]int),
@@ -420,6 +422,25 @@ func (s *RestAPI) GetSearchHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *RestAPI) GetReverseHandler(w http.ResponseWriter, r *http.Request) {
+	s.RLock()
+	defer s.RUnlock()
+
+	if !s.BasicAuth(w, r) {
+		http.Error(w, "Not authorized", http.StatusUnauthorized)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	switch r.Method {
+	case http.MethodGet:
+		json.NewEncoder(w).Encode(s.HitsUniq.Reverse)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 func (s *RestAPI) GetStreamsHandler(w http.ResponseWriter, r *http.Request) {
 	s.RLock()
 	defer s.RUnlock()
@@ -444,6 +465,13 @@ func (s *RestAPI) RecordDnsMessage(dm dnsutils.DnsMessage) {
 		s.Streams[dm.DnsTap.Identity] = 1
 	} else {
 		s.Streams[dm.DnsTap.Identity] += 1
+	}
+
+	// build reverse lookup table
+	for _, i := range dm.DNS.DnsRRs.Answers {
+		if i.Rdatatype == "A" {
+			s.HitsUniq.Reverse[i.Rdata] = dm.DNS.Qname
+		}
 	}
 
 	// record suspicious domains only is enabled
@@ -562,6 +590,7 @@ func (s *RestAPI) ListenAndServe() {
 	mux.HandleFunc("/domains/servfail/top", s.GetTopSfDomainsHandler)
 	mux.HandleFunc("/suspicious", s.GetSuspiciousHandler)
 	mux.HandleFunc("/search", s.GetSearchHandler)
+	mux.HandleFunc("/reverse", s.GetReverseHandler)
 
 	var err error
 	var listener net.Listener
